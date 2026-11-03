@@ -1,7 +1,5 @@
 # Copy to sdkconfig.local before the first build. This file contains no secrets.
 # Optional fallback; leave empty to configure Wi-Fi on the touchscreen.
-CONFIG_TRANSLATOR_WIFI_SSID=""
-CONFIG_TRANSLATOR_WIFI_PASSWORD=""
 CONFIG_TRANSLATOR_CUSTOMER_ID="YOUR_CUSTOMER_ID"
 CONFIG_TRANSLATOR_CUSTOMER_SECRET="YOUR_CUSTOMER_SECRET"
 CONFIG_TRANSLATOR_APP_ID="YOUR_APP_ID"
