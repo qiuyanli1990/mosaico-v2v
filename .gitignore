@@ -1,0 +1,39 @@
+# Downloaded build environment and dependencies
+/.tools/
+/third_party/
+/managed_components/
+/.venv/
+/venv/
+
+# Generated configuration and local credentials
+/sdkconfig
+/sdkconfig.old
+/sdkconfig.local
+/sdkconfig.local.*
+!/sdkconfig.local.example
+.env
+.env.*
+!.env.example
+
+# Generated images, build directories, logs and diagnostic dumps
+/build/
+/build-*/
+/dist/
+*.bin
+*.elf
+*.map
+*.log
+screenlog.*
+*.dmp
+*.pcm
+*.wav
+*.zip
+*.tar
+*.tar.gz
+
+# Host/editor caches
+*.pyc
+__pycache__/
+.DS_Store
+/.idea/
+/.vscode/

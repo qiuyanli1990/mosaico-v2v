@@ -1,0 +1,46 @@
+menu "Mosaico Translator"
+    config MOSAICO_USB_HIGH_SPEED
+        bool
+        default y if IDF_TARGET_ESP32S31
+
+    config TRANSLATOR_AEC_REF_DELAY_MS
+        int "DAC to microphone reference delay (ms)"
+        range 0 100
+        default 0
+        help
+            Additional analog/acoustic delay after completed I2S TX samples.
+            Mic and actual DAC PCM are paired on their DMA sample timestamps.
+            Calibrate this only from a simultaneous raw Mic / Ref recording.
+
+    config TRANSLATOR_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+    config TRANSLATOR_WIFI_PASSWORD
+        string "Wi-Fi password"
+        default ""
+    config TRANSLATOR_CUSTOMER_ID
+        string "Agora REST customer ID"
+        default ""
+    config TRANSLATOR_CUSTOMER_SECRET
+        string "Agora REST customer secret"
+        default ""
+    config TRANSLATOR_API_BASE
+        string "V2V API base URL"
+        default "https://api-ap-southeast-1.agora.io"
+    config TRANSLATOR_WHIP_BASE
+        string "Agora duplex WHIP base URL"
+        default "https://ap-webrtc-whip.ap.sd-rtn.com"
+    config TRANSLATOR_APP_ID
+        string "Agora App ID"
+        default ""
+    config TRANSLATOR_APP_CERT
+        string "Agora App Certificate (leave empty if disabled)"
+        default ""
+    config TRANSLATOR_VOICE_ID
+        string "English TTS voice ID"
+        default "male-qn-qingse"
+    config TRANSLATOR_AUTO_START
+        bool "Start translation automatically when USB, Wi-Fi and time are ready"
+        default n
+endmenu
+
