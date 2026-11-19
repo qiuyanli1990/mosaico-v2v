@@ -3,6 +3,8 @@
 Standalone ESP32-S31 firmware for Agora V2V translation, with a touchscreen,
 USB audio and three translation modes.
 
+Current release: **v9**. This release keeps AEC active throughout an active meeting, remembers Wi-Fi credentials for automatic reconnection after reboot, and starts the display at 40% brightness.
+
 | Mode | Audio source and behavior | V2V rooms |
 | --- | --- | --- |
 | Media | Translate playback from a USB-connected computer or phone; hear the translation on Mosaico | 1 |
@@ -144,8 +146,8 @@ The host suite runs with ASan/UBSan and covers PCM queues, audio workers,
 session lifecycle, request contracts, voice selection, USB descriptors and the
 actual prepared TinyUSB audio driver with a simulated USB controller.
 The UI suite uses the actual LVGL renderer with mocked hardware services.
-It renders previews to `build/ui-preview-v6/`; the `v6` name identifies the
-touchscreen layout, which the USB compatibility update retains.
+It renders previews to `build/ui-preview-v8/`; the `v8` name identifies the
+touchscreen layout, which the v9 settings update retains.
 Host tests do not measure acoustic AEC quality or replace hardware playback tests.
 
 ## Install and connect

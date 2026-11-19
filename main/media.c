@@ -96,6 +96,9 @@ static int gate_write(audio_render_handle_t handle, av_render_audio_frame_t *fra
     int16_t mono[240];
     const int16_t *input = (const int16_t *)frame->data;
     size_t frames = frame->size / (gate->info.channel * sizeof(int16_t));
+    if (gate->source == MEDIA_SOURCE_ONBOARD_MIC && !atomic_load(&portable_mode)) {
+        usb_audio_trace_microphone_frame(frame->pts, frame->data, frame->size);
+    }
     for (size_t offset = 0; offset < frames;) {
         size_t count = frames - offset;
         if (count > 240) count = 240;

@@ -21,6 +21,8 @@ static unsigned flushes;
 static uint16_t pixels[480 * 480], draw_buffer[480 * 40];
 static const char *output;
 static char mock_voice[TRANSLATION_VOICE_ID_SIZE];
+static char mock_mic_voice[TRANSLATION_VOICE_ID_SIZE];
+static size_t mic_source_index, mic_target_index;
 
 void *heap_caps_malloc(size_t size, unsigned caps)
 {
@@ -84,6 +86,12 @@ void session_set_voice(const char *voice)
 {
     assert(!voice || strncmp(voice, "fm_02_", 6) == 0);
     snprintf(mock_voice, sizeof(mock_voice), "%s", voice ? voice : "");
+}
+void session_set_meeting_mic(size_t source, size_t target, const char *voice)
+{
+    mic_source_index = source;
+    mic_target_index = target;
+    snprintf(mock_mic_voice, sizeof(mock_mic_voice), "%s", voice ? voice : "");
 }
 void session_set_travel_turn(session_travel_turn_t turn) { mock_turn = turn; }
 session_travel_turn_t session_get_travel_turn(void) { return mock_turn; }
@@ -195,6 +203,10 @@ static void test_full_language_names(void)
             size_t target = i == long_name ? other : long_name;
             lv_dropdown_set_selected(setup->source, i);
             lv_dropdown_set_selected(setup->target, target);
+            if (mode == SESSION_MODE_LIVE_MEETING) {
+                lv_dropdown_set_selected(setups[MEETING_MIC_SETUP].source, target);
+                lv_dropdown_set_selected(setups[MEETING_MIC_SETUP].target, i);
+            }
             configure_directions();
             lv_obj_update_layout(lv_screen_active());
             const translation_language_t *from = translation_language_at(i);
@@ -233,6 +245,7 @@ int main(int argc, char **argv)
     assert(scans == 0 && starts == 0);
     assert(strcmp(lv_label_get_text(home_clock), "--:--") == 0);
     assert(strstr(lv_label_get_text(home_battery), "--%"));
+    assert(lv_slider_get_value(brightness_sliders[0]) == 40 && last_brightness == 40);
     screenshot("01-home-offline");
     mock_network.connection = NETWORK_CONNECTED;
     strcpy(mock_network.ssid, "Coffee & Clouds");
@@ -266,16 +279,51 @@ int main(int argc, char **argv)
     assert(strcmp(mock_voice, translation_voice_for_language("en-US", 0)->id) == 0);
     choose_option(setups[0].voice, 1);
     assert(strcmp(mock_voice, translation_voice_for_language("en-US", 1)->id) == 0);
+    assert(strcmp(mock_voice, "fm_02_Santa_Claus") == 0);
     choose_option(setups[0].target, translation_language_index("ja-JP"));
     assert(lv_dropdown_get_option_count(setups[0].voice) == translation_voice_count_for_language("ja-JP"));
     assert(strcmp(mock_voice, translation_voice_for_language("ja-JP", 0)->id) == 0);
     choose_option(setups[0].voice, 2);
     assert(strcmp(mock_voice, translation_voice_for_language("ja-JP", 2)->id) == 0);
     choose_option(setups[0].target, translation_language_index("ms-MY"));
-    assert(strstr(lv_dropdown_get_options(setups[0].voice), "multilingual"));
+    assert(!mock_voice[0]);
+    assert(strcmp(lv_dropdown_get_options(setups[0].voice), "No voices available") == 0);
     choose_option(setups[0].target, translation_language_index("tl-PH"));
     assert(!mock_voice[0]);
     assert(strcmp(lv_dropdown_get_options(setups[0].voice), "No voices available") == 0);
+    /* Exercise the real dropdown with every full list, including the 73-row one. */
+    for (size_t i = 0; i < TRANSLATION_LANGUAGE_COUNT; ++i) {
+        const translation_language_t *language = translation_language_at(i);
+        choose_option(setups[0].target, i);
+        size_t count = translation_voice_count_for_language(language->code);
+        assert(lv_dropdown_get_option_count(setups[0].voice) == (count ? count : 1));
+        if (!count) {
+            assert(!mock_voice[0]);
+            continue;
+        }
+        choose_option(setups[0].voice, count - 1);
+        const translation_voice_t *last = translation_voice_for_language(language->code, count - 1);
+        assert(strcmp(mock_voice, last->id) == 0);
+        char selected[128];
+        lv_dropdown_get_selected_str(setups[0].voice, selected, sizeof(selected));
+        assert(strcmp(selected, last->name) == 0);
+    }
+    choose_option(setups[0].target, translation_language_index("zh-CN"));
+    assert(lv_obj_get_style_text_font(setups[0].voice, LV_PART_MAIN) == LV_FONT_DEFAULT);
+    assert(strstr(lv_dropdown_get_options(setups[0].voice), "Youthful Man"));
+    lv_dropdown_open(setups[0].voice);
+    screenshot("04-voices-chinese");
+    size_t visible_ink = 0;
+    for (unsigned y = 140; y < 260; ++y)
+        for (unsigned x = 70; x < 350; ++x)
+            visible_ink += pixels[y * 480 + x] == lv_color_to_u16(lv_color_hex(INK));
+    assert(visible_ink > 100);
+    lv_dropdown_close(setups[0].voice);
+    choose_option(setups[0].target, translation_language_index("pt-BR"));
+    choose_option(setups[0].voice, 72);
+    lv_dropdown_open(setups[0].voice);
+    screenshot("04-voices-portuguese");
+    lv_dropdown_close(setups[0].voice);
     choose_option(setups[0].target, translation_language_index("en-US"));
     assert(lv_obj_get_parent(volume_slider) != pages[PAGE_MEETING_SETUP]);
     screenshot("04-meeting-setup");
@@ -301,6 +349,43 @@ int main(int argc, char **argv)
     lv_obj_send_event(setups[0].source, LV_EVENT_VALUE_CHANGED, NULL);
     assert(!lv_obj_has_state(setups[0].begin, LV_STATE_DISABLED));
     click(setups[0].begin);
+    check_page(PAGE_MEETING_MIC_SETUP);
+    assert(starts == 0 && !mock_requested);
+    setup_t *mic = &setups[MEETING_MIC_SETUP];
+    assert(lv_dropdown_get_selected(mic->source) == translation_language_index("en-US"));
+    assert(lv_dropdown_get_selected(mic->target) == translation_language_index("zh-CN"));
+    choose_option(mic->voice, 0);
+    assert(strcmp(mock_mic_voice, "fm_02_male-qn-qingse") == 0);
+    assert(strstr(lv_dropdown_get_options(mic->voice), "Youthful Man"));
+    lv_dropdown_open(mic->voice);
+    screenshot("04-meeting-mic-chinese-voices");
+    lv_dropdown_close(mic->voice);
+    choose_option(mic->source, translation_language_index("fr-FR"));
+    choose_option(mic->target, translation_language_index("de-DE"));
+    choose_option(mic->voice, 1);
+    assert(mic_source_index == translation_language_index("fr-FR"));
+    assert(mic_target_index == translation_language_index("de-DE"));
+    assert(strcmp(mock_mic_voice, translation_voice_for_language("de-DE", 1)->id) == 0);
+    assert(source_index == translation_language_index("zh-CN"));
+    assert(target_index == translation_language_index("en-US"));
+    assert(strcmp(mock_voice, translation_voice_for_language("en-US", 0)->id) == 0);
+    screenshot("04-meeting-mic-setup");
+    lv_dropdown_open(mic->voice);
+    ui_show_wifi_settings();
+    assert(!lv_dropdown_is_open(mic->voice));
+    back();
+    check_page(PAGE_MEETING_MIC_SETUP);
+    back();
+    check_page(PAGE_MEETING_SETUP);
+    click(setups[0].begin);
+    check_page(PAGE_MEETING_MIC_SETUP);
+    assert(lv_dropdown_get_selected(mic->voice) == 1);
+    choose_option(mic->source, translation_language_index("de-DE"));
+    assert(lv_obj_has_state(mic->begin, LV_STATE_DISABLED));
+    click(mic->begin);
+    assert(starts == 0);
+    choose_option(mic->source, translation_language_index("fr-FR"));
+    click(mic->begin);
     check_page(PAGE_TRANSLATE);
     assert(mock_requested && starts == 1);
     mock_state.phase = APP_RUNNING;
@@ -310,8 +395,11 @@ int main(int argc, char **argv)
     ++subtitle_generation;
     refresh(NULL);
     assert(strcmp(lv_label_get_text(translation_title), "Live meeting") == 0);
-    assert(strcmp(lv_label_get_text(directions[0].state), "MEETING TO YOU") == 0);
-    assert(strcmp(lv_label_get_text(directions[1].state), "YOU TO MEETING") == 0);
+    assert(strcmp(lv_label_get_text(directions[0].state), "MEDIA TO YOU") == 0);
+    assert(strcmp(lv_label_get_text(directions[1].state), "YOU TO MEDIA") == 0);
+    lv_obj_update_layout(lv_screen_active());
+    assert_language_flow(0, "Chinese", "English", false);
+    assert_language_flow(1, "French", "German", false);
     assert(strcmp(lv_label_get_text(directions[0].hint), "Computer speaker:\nChoose mosaico") == 0);
     assert(strcmp(lv_label_get_text(directions[1].hint), "Computer mic:\nChoose mosaico") == 0);
     click(directions[0].root);
@@ -358,9 +446,11 @@ int main(int argc, char **argv)
     check_page(PAGE_TRANSLATE);
     assert(mock_requested && stops == before_stops);
     back();
-    check_page(PAGE_MEETING_SETUP);
+    check_page(PAGE_MEETING_MIC_SETUP);
     assert(!mock_requested && stops == before_stops + 1);
     assert(lv_obj_has_state(setups[0].begin, LV_STATE_DISABLED));
+    back();
+    check_page(PAGE_MEETING_SETUP);
     back();
     check_page(PAGE_MODES);
     click(mode_buttons[1]);
@@ -449,6 +539,8 @@ int main(int argc, char **argv)
     click(mode_buttons[SESSION_MODE_LIVE_MEETING]);
     check_page(PAGE_MEETING_SETUP);
     click(setups[SESSION_MODE_LIVE_MEETING].begin);
+    check_page(PAGE_MEETING_MIC_SETUP);
+    click(mic->begin);
     check_page(PAGE_TRANSLATE);
     assert(!lv_obj_has_flag(directions[1].root, LV_OBJ_FLAG_HIDDEN));
     assert(!lv_obj_has_flag(directions[1].hint, LV_OBJ_FLAG_HIDDEN));
@@ -457,9 +549,11 @@ int main(int argc, char **argv)
     lv_obj_update_layout(lv_screen_active());
     assert(lv_obj_get_width(directions[0].root) == 204);
     back();
-    check_page(PAGE_MEETING_SETUP);
+    check_page(PAGE_MEETING_MIC_SETUP);
     mock_state.phase = APP_IDLE;
     refresh(NULL);
+    back();
+    check_page(PAGE_MEETING_SETUP);
     back();
     check_page(PAGE_MODES);
     back();

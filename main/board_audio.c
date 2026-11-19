@@ -130,7 +130,7 @@ static void input_task(void *argument)
     uint64_t captured_dropped = 0;
     unsigned mic_gaps = 0, raw_peak = 0, clean_peak = 0;
     unsigned resets = 0, max_dsp_us = 0, max_reset_us = 0;
-    unsigned dsp_frames = 0, bypass_frames = 0;
+    unsigned dsp_frames = 0, idle_dsp_frames = 0, bypass_frames = 0;
     bool reset_pending = false;
     bool dsp_has_history = false;
     const size_t count = aec_processor_frame_samples();
@@ -166,11 +166,14 @@ static void input_task(void *argument)
                 mic_start - CONFIG_TRANSLATOR_AEC_REF_DELAY_MS * 48, aligned_ref, count);
             reference_missing += count - available;
             bool echo_active = last_echo && mic_start <= last_echo + BOARD_AUDIO_RATE / 4;
-            /* No DAC playback or echo tail: the output is already raw Mic.
-             * Avoid unused DSP work/reallocation during TLS setup or idle.
-             * Reset stale adaptive history once playback resumes. */
-            if (!echo_active && dsp_has_history) reset_pending = true;
-            if (echo_active && reset_pending && esp_timer_get_time() >= reset_retry_us) {
+            xSemaphoreTake(routing_lock, portMAX_DELAY);
+            bool capture_active = input_source >= 0;
+            xSemaphoreGive(routing_lock);
+            /* Keep the adaptive filter alive for the whole active conversation,
+             * including phrase gaps where the local reference is silent. */
+            bool run_dsp = capture_active || echo_active;
+            if (!run_dsp && dsp_has_history) reset_pending = true;
+            if (run_dsp && reset_pending && esp_timer_get_time() >= reset_retry_us) {
                 crash_trace_mark(CRASH_TRACE_AUDIO, CRASH_STAGE_AEC_RESET, mic_gaps);
                 int64_t started = esp_timer_get_time();
                 if (aec_processor_reset() != ESP_OK) {
@@ -186,7 +189,7 @@ static void input_task(void *argument)
             }
             unsigned elapsed = 0;
             esp_err_t result = ESP_ERR_INVALID_STATE;
-            if (echo_active) {
+            if (run_dsp) {
                 crash_trace_mark(CRASH_TRACE_AUDIO, CRASH_STAGE_AEC_PROCESS, resets);
                 int64_t started = esp_timer_get_time();
                 result = aec_processor_process_48k(raw, aligned_ref, clean, count);
@@ -195,6 +198,7 @@ static void input_task(void *argument)
                 if (result == ESP_OK) {
                     dsp_has_history = true;
                     ++dsp_frames;
+                    if (!echo_active) ++idle_dsp_frames;
                 }
             }
             if (result != ESP_OK) {
@@ -228,10 +232,10 @@ static void input_task(void *argument)
             ESP_LOGI(TAG, "Mic=%" PRIu64 " AEC=%" PRIu64 " routed=%" PRIu64 "/%" PRIu64
                      " raw_peak=%u clean_peak=%u route=%d ref_missing=%" PRIu64
                      " dma_drops=%u mic_gaps=%u input_dropped=%" PRIu64
-                     " resets=%u dsp_frames=%u bypass_frames=%u dsp_max_us=%u reset_max_us=%u stack_free=%u",
+                     " resets=%u dsp_frames=%u idle_dsp_frames=%u bypass_frames=%u dsp_max_us=%u reset_max_us=%u stack_free=%u",
                      mic_samples, processed, sent[0], sent[1], raw_peak, clean_peak, selected,
                      reference_missing, atomic_load(&dma_event_drops), mic_gaps, dropped + captured_dropped,
-                     resets, dsp_frames, bypass_frames, max_dsp_us, max_reset_us,
+                     resets, dsp_frames, idle_dsp_frames, bypass_frames, max_dsp_us, max_reset_us,
                      (unsigned)uxTaskGetStackHighWaterMark(NULL));
             raw_peak = clean_peak = 0;
             next_metrics_us = now + 10000000;
@@ -336,7 +340,7 @@ esp_err_t board_audio_init(unsigned volume)
         return ESP_ERR_NO_MEM;
     }
     atomic_store(&ready, true);
-    ESP_LOGI(TAG, "ES8311 duplex: fixed 48 kHz/S16/mono left slot; one Mic/AEC worker, one DAC mixer; ref delay=%d ms",
+    ESP_LOGI(TAG, "ES8311 duplex: fixed 48 kHz/S16/mono left slot; one Mic/AEC worker, one DAC mixer; AEC=continuous-v1, ref delay=%d ms",
              CONFIG_TRANSLATOR_AEC_REF_DELAY_MS);
     return ESP_OK;
 }

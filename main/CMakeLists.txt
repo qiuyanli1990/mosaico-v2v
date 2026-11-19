@@ -4,7 +4,8 @@ idf_component_register(
          "translation_protocol.c" "media.c" "usb_audio.c" "usb_uac_trace.c" "pcm_ring.c"
          "usb_console.c" "crash_trace.c" "display_transport.c"
          "subtitles.c" "ui_device.c"
-         "usb_capture.c" "ui.c" "agora_auth.c" "agora_signaling.c" "webrtc.c"
+         "usb_capture.c" "ui.c"
+         "agora_auth.c" "agora_signaling.c" "webrtc.c"
     INCLUDE_DIRS "."
     REQUIRES esp-mosaico-bsp esp_webrtc esp_peer av_render media_lib_utils
              esp_capture esp_audio_codec esp_codec_dev usb_device_uac
@@ -67,4 +68,36 @@ list(FILTER tusb_sources EXCLUDE REGEX "(^|/)class/audio/audio_device\\.c$")
 set_property(TARGET ${tusb_lib} PROPERTY SOURCES "${tusb_sources}")
 target_sources(${tusb_lib} PRIVATE "${tusb_audio_overlay}")
 target_include_directories(${tusb_lib} PRIVATE "${tusb_component_dir}/src/class/audio")
+
+set(dwc2_source "${tusb_component_dir}/src/portable/synopsys/dwc2/dcd_dwc2.c")
+set(dwc2_overlay "${CMAKE_CURRENT_BINARY_DIR}/usb_audio_driver/dcd_dwc2.c")
+set(dwc2_prepare "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_dwc2.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${dwc2_source}" "${dwc2_prepare}")
+execute_process(COMMAND "${idf_python}" "${dwc2_prepare}" "${dwc2_source}" "${dwc2_overlay}"
+    RESULT_VARIABLE dwc2_result)
+if(NOT dwc2_result EQUAL 0)
+    message(FATAL_ERROR "Unable to prepare DWC2 IN recovery")
+endif()
+get_target_property(tusb_sources ${tusb_lib} SOURCES)
+list(FILTER tusb_sources EXCLUDE REGEX "(^|/)portable/synopsys/dwc2/dcd_dwc2\\.c$")
+set_property(TARGET ${tusb_lib} PROPERTY SOURCES "${tusb_sources}")
+target_sources(${tusb_lib} PRIVATE "${dwc2_overlay}")
+target_include_directories(${tusb_lib} PRIVATE "${tusb_component_dir}/src/portable/synopsys/dwc2")
+
+set(uac_audio_source "${uac_component_dir}/usb_device_uac.c")
+set(uac_audio_overlay "${CMAKE_CURRENT_BINARY_DIR}/usb_audio_driver/usb_device_uac.c")
+set(uac_audio_prepare "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/prepare_uac_audio.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${uac_audio_source}" "${uac_audio_prepare}")
+execute_process(COMMAND "${idf_python}" "${uac_audio_prepare}"
+    "${uac_audio_source}" "${uac_audio_overlay}"
+    RESULT_VARIABLE uac_audio_result)
+if(NOT uac_audio_result EQUAL 0)
+    message(FATAL_ERROR "Unable to prepare the UAC microphone bridge")
+endif()
+get_target_property(uac_sources ${uac_lib} SOURCES)
+list(FILTER uac_sources EXCLUDE REGEX "(^|/)usb_device_uac\\.c$")
+set_property(TARGET ${uac_lib} PROPERTY SOURCES "${uac_sources}")
+target_sources(${uac_lib} PRIVATE "${uac_audio_overlay}")
+target_include_directories(${uac_lib} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 

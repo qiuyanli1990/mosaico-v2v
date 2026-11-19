@@ -4,6 +4,8 @@
 
 #define TRANSLATION_LANGUAGE_COUNT 60U
 #define TRANSLATION_VOICE_ID_SIZE 64U
+/* Full Portuguese list currently needs 1028 bytes including its terminator. */
+#define TRANSLATION_VOICE_OPTIONS_SIZE 1536U
 
 typedef struct {
     const char *code;

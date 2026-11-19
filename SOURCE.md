@@ -1,8 +1,8 @@
 # Source provenance
 
-This repository starts from a source-only snapshot of development commit
-`61731888fbc2ade0032aad1bd6b303aaa273f6c9`, titled
-`v7: fix Media USB audio on macOS` (2026-11-03).
+This repository is a source-only publication of the v9 firmware, based on
+development commit `6dd56bf` (`v8: fix live meeting USB mic buzzing`, 2026-11-06)
+plus the v9 continuous-AEC, Wi-Fi persistence/auto-connect and 40% default-brightness changes.
 
 The snapshot retains the firmware, tests, dependency manifests and build
 scripts. Publication preparation rewrites the setup documentation and ignore
@@ -15,7 +15,7 @@ USB device revision: `0x0105`.
 USB audio profile: `hs-feedback-1ms-v3`.
 
 The application version remains `0.1.0`. The touchscreen and UI test output
-retain their existing `v6` layout identifiers. These identifiers refer to
+retain their existing `v8` layout identifiers. These identifiers refer to
 different parts of the project and are not Git release tags.
 
 Third-party dependency revisions and integration details are in

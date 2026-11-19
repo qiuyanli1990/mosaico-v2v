@@ -21,6 +21,8 @@ void session_request(bool start);
 bool session_requested(void);
 void session_set_languages(size_t source_index, size_t target_index);
 void session_set_voice(const char *voice_id);
+/* Live meeting microphone direction; independent of the USB playback direction. */
+void session_set_meeting_mic(size_t source_index, size_t target_index, const char *voice_id);
 void session_set_mode(session_mode_t mode);
 session_mode_t session_get_mode(void);
 void session_set_travel_turn(session_travel_turn_t turn);

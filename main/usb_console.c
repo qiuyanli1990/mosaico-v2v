@@ -11,7 +11,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/portmacro.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "tusb.h"
 #include "crash_trace.h"
@@ -23,7 +23,8 @@
 #define LOG_CHUNK_SIZE 512
 
 static vprintf_like_t previous_vprintf;
-static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
+static StaticSemaphore_t log_lock_storage;
+static SemaphoreHandle_t log_lock;
 /* Software log history; the USB endpoint buffers remain in internal RAM. */
 static EXT_RAM_BSS_ATTR char log_cache[LOG_CACHE_SIZE];
 static size_t log_head;
@@ -73,7 +74,9 @@ static void cache_log(const char *data, size_t length)
         length = LOG_CACHE_SIZE;
     }
 
-    portENTER_CRITICAL(&log_lock);
+    /* The log hook and CDC drain run in tasks. PSRAM copies must leave USB
+     * interrupts enabled, including while no terminal is connected. */
+    xSemaphoreTake(log_lock, portMAX_DELAY);
     while (log_count + length > LOG_CACHE_SIZE) {
         log_tail = (log_tail + 1) % LOG_CACHE_SIZE;
         --log_count;
@@ -83,7 +86,20 @@ static void cache_log(const char *data, size_t length)
         log_head = (log_head + 1) % LOG_CACHE_SIZE;
     }
     log_count += length;
-    portEXIT_CRITICAL(&log_lock);
+    xSemaphoreGive(log_lock);
+}
+
+static size_t read_cached_log(char *out, size_t capacity)
+{
+    xSemaphoreTake(log_lock, portMAX_DELAY);
+    size_t count = capacity < log_count ? capacity : log_count;
+    for (size_t i = 0; i < count; ++i) {
+        out[i] = log_cache[log_tail];
+        log_tail = (log_tail + 1) % LOG_CACHE_SIZE;
+    }
+    log_count -= count;
+    xSemaphoreGive(log_lock);
+    return count;
 }
 
 static int usb_log_vprintf(const char *format, va_list args)
@@ -147,16 +163,7 @@ static void usb_log_task(void *arg)
             }
         } else if (available) {
             size_t count = available < sizeof(chunk) ? available : sizeof(chunk);
-            portENTER_CRITICAL(&log_lock);
-            if (count > log_count) {
-                count = log_count;
-            }
-            for (size_t i = 0; i < count; ++i) {
-                chunk[i] = log_cache[log_tail];
-                log_tail = (log_tail + 1) % LOG_CACHE_SIZE;
-            }
-            log_count -= count;
-            portEXIT_CRITICAL(&log_lock);
+            count = read_cached_log(chunk, count);
 
             if (count) {
                 uint32_t written = tud_cdc_n_write(0, chunk, count);
@@ -172,6 +179,8 @@ static void usb_log_task(void *arg)
 
 void usb_console_init(void)
 {
+    log_lock = xSemaphoreCreateMutexStatic(&log_lock_storage);
+    configASSERT(log_lock);
     boot_id = esp_random();
     boot_reset_reason = esp_reset_reason();
     crash_trace_init(boot_id);

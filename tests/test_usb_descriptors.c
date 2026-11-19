@@ -106,7 +106,7 @@ static void check_configuration(const uint8_t *actual, const uint8_t *original, 
 int main(void)
 {
     const tusb_desc_device_t *device = (const tusb_desc_device_t *)tud_descriptor_device_cb();
-    assert(device->idVendor == 0x303A && device->idProduct == 0x4012 && device->bcdDevice == 0x0105);
+    assert(device->idVendor == 0x303A && device->idProduct == 0x4012 && device->bcdDevice == 0x0110);
     assert(CFG_TUD_AUDIO_FUNC_1_N_AS_INT == 2);
     assert(CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ >= 1920);
     assert(CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP && CFG_TUD_AUDIO_ENABLE_FEEDBACK_FORMAT_CORRECTION);

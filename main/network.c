@@ -140,8 +140,11 @@ static void network_event(void *arg, esp_event_base_t base, int32_t id, void *ev
         bool retry;
         portENTER_CRITICAL(&lock);
         do_switch = switching;
-        retry = !do_switch && has_credentials && !status.scanning && retries < 3;
-        if (!do_switch && has_credentials && status.scanning && retries < 3) {
+        /* Keep trying the remembered network after transient AP or DHCP
+         * failures. The user can select another network from the UI while
+         * `switching` is set. */
+        retry = !do_switch && has_credentials && !status.scanning;
+        if (!do_switch && has_credentials && status.scanning) {
             retry_after_scan = true;
         }
         if (retry) {
@@ -194,7 +197,8 @@ esp_err_t network_start(void)
 {
     char ssid[33] = {0};
     char password[65] = {0};
-    bool available = load_credentials(ssid, password);
+    bool loaded = load_credentials(ssid, password);
+    bool available = loaded;
     if (!available && CONFIG_TRANSLATOR_WIFI_SSID[0] &&
         strlen(CONFIG_TRANSLATOR_WIFI_SSID) <= 32 &&
         strlen(CONFIG_TRANSLATOR_WIFI_PASSWORD) <= 63) {
@@ -261,10 +265,14 @@ esp_err_t network_start(void)
     strcpy(desired_ssid, ssid);
     strcpy(desired_password, password);
     has_credentials = available;
+    save_on_connect = available && !loaded;
     strcpy(status.ssid, ssid);
     status.connection = available ? NETWORK_CONNECTING : NETWORK_NO_CREDENTIALS;
     portEXIT_CRITICAL(&lock);
     memset(password, 0, sizeof(password));
+    if (available && loaded) {
+        ESP_LOGI(TAG, "Loaded remembered Wi-Fi credentials; auto-connect enabled");
+    }
     result = esp_wifi_start();
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(result));
@@ -366,10 +374,26 @@ esp_err_t network_connect(const char *ssid, const char *password)
     status.disconnect_reason = 0;
     status.scan_error = ESP_OK;
     has_credentials = true;
-    save_on_connect = true;
     switching = true;
     retry_after_scan = false;
     retries = 0;
+    portEXIT_CRITICAL(&lock);
+    /* Persist the entered credentials before starting the switch. This keeps
+     * the password across a reboot even if the first association attempt is
+     * interrupted by a power or USB event. Do the NVS transaction outside the
+     * network lock because it may block. */
+    esp_err_t save_result = save_credentials(ssid, password);
+    if (save_result != ESP_OK) {
+        portENTER_CRITICAL(&lock);
+        switching = false;
+        status.connection = NETWORK_FAILED;
+        portEXIT_CRITICAL(&lock);
+        ESP_LOGE(TAG, "Could not remember Wi-Fi credentials: %s",
+                 esp_err_to_name(save_result));
+        return save_result;
+    }
+    portENTER_CRITICAL(&lock);
+    save_on_connect = false;
     portEXIT_CRITICAL(&lock);
     bool was_connected = atomic_load(&connected);
     atomic_store(&connected, false);

@@ -1,8 +1,8 @@
 #pragma once
 
 #define MOSAICO_USB_DEVICE_NAME "mosaico"
-#define MOSAICO_USB_DEVICE_REVISION 0x0105
-#define MOSAICO_USB_AUDIO_PROFILE "hs-feedback-1ms-v3"
+#define MOSAICO_USB_DEVICE_REVISION 0x0110
+#define MOSAICO_USB_AUDIO_PROFILE "mic-direct-v8"
 
 enum {
     ITF_NUM_CDC = 0,

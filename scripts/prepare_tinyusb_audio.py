@@ -6,8 +6,15 @@ from pathlib import Path
 
 def prepare(source: str) -> str:
     changes = [
+        ('  // Send everything in ISO EP FIFO\n  uint16_t n_bytes_tx;',
+         '  // Send everything in ISO EP FIFO\n  uint16_t n_bytes_tx;\n'
+         '  usb_uac_trace_mic_fifo(tu_fifo_count(&audio->ep_in_ff),\n'
+         '      audio->packet_sz_tx[0]);'),
         ('#include "audio_device.h"',
          '#include "audio_device.h"\n#include "usb_uac_trace.h"'),
+        ('  tu_fifo_read_n(&audio->ep_in_ff, audio->lin_buf_in, n_bytes_tx);',
+         '  // Short reads must never transmit stale bytes from the previous packet.\n'
+         '  n_bytes_tx = tu_fifo_read_n(&audio->ep_in_ff, audio->lin_buf_in, n_bytes_tx);'),
         ('  TU_VERIFY(tu_fifo_write_n(&audio->ep_out_ff, audio->lin_buf_out, n_bytes_received));',
          '  // An empty isochronous packet must still rearm OUT reception.\n'
          '  if (n_bytes_received != 0) {\n'

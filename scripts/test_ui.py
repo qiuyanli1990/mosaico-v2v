@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise actual LVGL navigation and render the v6 pages on the host."""
+"""Exercise actual LVGL navigation and render the v8 pages on the host."""
 import argparse
 from pathlib import Path
 import struct
@@ -35,23 +35,23 @@ def create_previews(output):
         for row in range(480):
             start = ((y + row) * width + x) * 3
             overview[start:start + 480 * 3] = rgb[row * 480 * 3:(row + 1) * 480 * 3]
-    save_png(output / "v6-overview.png", width, height, overview)
+    save_png(output / "v8-overview.png", width, height, overview)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "build/ui-preview-v6")
+    parser.add_argument("--output", type=Path, default=ROOT / "build/ui-preview-v8")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    host_build = ROOT / ".tools/ui-host-v6"
+    host_build = ROOT / ".tools/ui-host-v8"
     subprocess.run(["cmake", "-S", str(ROOT / "tests/ui"), "-B", str(host_build),
                     "-G", "Ninja"], check=True)
     subprocess.run(["cmake", "--build", str(host_build), "--parallel", "8"], check=True)
     subprocess.run([str(host_build / "ui_test"), str(output)], check=True)
     create_previews(output)
     print(f"LVGL page renders (PNG + PPM): {output}")
-    print(f"Page overview: {output / 'v6-overview.png'}")
+    print(f"Page overview: {output / 'v8-overview.png'}")
 
 
 if __name__ == "__main__":

@@ -7,11 +7,11 @@
 #include "pcm_timeline.h"
 #include "translation_protocol.h"
 
-static void test_ring(void)
+static void test_ring_capacity(size_t capacity)
 {
-    int16_t storage[7];
-    pcm_ring_t ring = {.samples = storage, .capacity = 7};
-    int16_t reference[7];
+    int16_t storage[256];
+    pcm_ring_t ring = {.samples = storage, .capacity = capacity};
+    int16_t reference[256];
     size_t reference_count = 0;
     uint64_t dropped = 0;
     unsigned random = 1234;
@@ -25,8 +25,8 @@ static void test_ring(void)
             int16_t values[23];
             for (size_t i = 0; i < count; ++i) {
                 values[i] = (int16_t)(operation + i);
-                if (reference_count == 7) {
-                    memmove(reference, reference + 1, 6 * sizeof(*reference));
+                if (reference_count == capacity) {
+                    memmove(reference, reference + 1, (capacity - 1) * sizeof(*reference));
                     --reference_count;
                     ++dropped;
                 }
@@ -46,6 +46,26 @@ static void test_ring(void)
         assert(ring.dropped == dropped);
         assert(ring.count <= ring.capacity);
     }
+}
+
+static void test_ring(void)
+{
+    test_ring_capacity(1);
+    test_ring_capacity(7);
+    test_ring_capacity(256);
+    /* Existing in-place callers observe sample-by-sample overlap semantics. */
+    int16_t storage[] = {1, 2, 3, 4, 5, 6, 7};
+    pcm_ring_t ring = {.samples = storage, .capacity = 7, .head = 3, .count = 2};
+    pcm_ring_write(&ring, storage, 7);
+    const int16_t expected_write[] = {3, 4, 5, 1, 2, 1, 2};
+    assert(memcmp(storage, expected_write, sizeof(storage)) == 0);
+    assert(ring.head == 5 && ring.count == 7 && ring.dropped == 2);
+    for (unsigned i = 0; i < 7; ++i) storage[i] = i + 1;
+    ring.head = 3;
+    assert(pcm_ring_read(&ring, storage, 7) == 7);
+    const int16_t expected_read[] = {4, 5, 6, 7, 4, 5, 6};
+    assert(memcmp(storage, expected_read, sizeof(storage)) == 0);
+    assert(ring.head == 3 && ring.count == 0 && ring.dropped == 2);
 }
 
 static void test_audio_timeline(void)
@@ -145,7 +165,7 @@ static void test_join_contract(void)
     request.tts_enabled = true;
     assert(!translation_join_json(&request));
     assert(translation_language_index("zh-CN") < TRANSLATION_LANGUAGE_COUNT);
-    assert(translation_tts_language_count() == 35);
+    assert(translation_tts_language_count() == 23);
 }
 
 static void test_voices(void)
@@ -183,20 +203,54 @@ static void test_voices(void)
             for (size_t earlier = 0; earlier < option; ++earlier)
                 assert(strcmp(voice->id, translation_voice_for_language(language->code, earlier)->id) != 0);
         }
-        assert(dropdown_size < 512);
+        assert(dropdown_size < TRANSLATION_VOICE_OPTIONS_SIZE);
         assert(!translation_voice_for_language(language->code, count));
     }
-    assert(supported == 35);
+    assert(supported == 23);
     const char *native_languages[] = {"zh-CN", "ja-JP", "ko-KR", "en-US", "de-DE", "fr-FR", "es-ES",
                                       "pt-BR", "ru-RU", "ar-SA", "hi-IN", "id-ID", "th-TH", "vi-VN"};
     for (size_t i = 0; i < sizeof(native_languages) / sizeof(native_languages[0]); ++i)
         assert(translation_voice_count_for_language(native_languages[i]) > 0);
     assert(strcmp(translation_voice_for_language("en-US", 0)->id, "fm_02_English_Graceful_Lady") == 0);
+    const struct { const char *code; size_t count; } official_groups[] = {
+        {"zh-CN", 50}, {"yue", 6}, {"en-US", 16}, {"ja-JP", 15}, {"ko-KR", 49},
+        {"es-ES", 47}, {"pt-BR", 73}, {"fr-FR", 5}, {"id-ID", 9}, {"de-DE", 3},
+        {"ru-RU", 8}, {"it-IT", 4}, {"ar-SA", 2}, {"tr-TR", 2}, {"uk-UA", 2},
+        {"nl-NL", 2}, {"vi-VN", 1}, {"th-TH", 4}, {"pl-PL", 4}, {"ro-RO", 4},
+        {"el-GR", 3}, {"cs-CZ", 3}, {"fi-FI", 3}, {"hi-IN", 3},
+    };
+    size_t total = 0;
+    for (size_t i = 0; i < sizeof(official_groups) / sizeof(official_groups[0]); ++i) {
+        assert(translation_voice_count_for_language(official_groups[i].code) == official_groups[i].count);
+        total += official_groups[i].count;
+        for (size_t j = 0; j < official_groups[i].count; ++j) {
+            const translation_voice_t *voice = translation_voice_for_language(official_groups[i].code, j);
+            assert(translation_format_voice_id(voice->id, formatted, sizeof(formatted)));
+            for (const unsigned char *letter = (const unsigned char *)voice->name; *letter; ++letter)
+                assert(*letter >= 32 && *letter < 127);
+        }
+    }
+    assert(total == 318);
+    assert(!translation_language_tts_supported("yue")); /* Catalog support is separate from V2V support. */
+    const char *english_ids[] = {"fm_02_English_Trustworthy_Man", "fm_02_English_Gentle-voiced_man",
+                                 "fm_02_Serene_Woman"};
+    for (size_t i = 0; i < sizeof(english_ids) / sizeof(english_ids[0]); ++i) {
+        bool found = false;
+        for (size_t j = 0; j < translation_voice_count_for_language("en-US"); ++j)
+            found |= strcmp(translation_voice_for_language("en-US", j)->id, english_ids[i]) == 0;
+        assert(found);
+    }
     assert(strcmp(translation_voice_for_language("zh-CN", 0)->id, "fm_02_male-qn-qingse") == 0);
     assert(translation_voice_count_for_language("en-SG") == translation_voice_count_for_language("en-US"));
     assert(translation_voice_count_for_language("zh-SG") == translation_voice_count_for_language("zh-CN"));
     assert(translation_voice_count_for_language("ms-SG") == translation_voice_count_for_language("ms-MY"));
-    assert(strstr(translation_voice_for_language("ms-MY", 0)->name, "multilingual"));
+    const char *unmapped_languages[] = {"af-ZA", "bg-BG", "ca-ES", "hr-HR", "da-DK", "he-IL",
+                                        "hu-HU", "ms-MY", "no-NO", "sk-SK", "sl-SI", "sv-SE"};
+    for (size_t i = 0; i < sizeof(unmapped_languages) / sizeof(unmapped_languages[0]); ++i) {
+        assert(!translation_voice_count_for_language(unmapped_languages[i]));
+        assert(!translation_voice_for_language(unmapped_languages[i], 0));
+        assert(!translation_language_tts_supported(unmapped_languages[i]));
+    }
     assert(!translation_voice_count_for_language("tl-PH"));
     assert(!translation_voice_count_for_language("my-MM"));
     assert(translation_language_index("my-MM") == TRANSLATION_LANGUAGE_COUNT);

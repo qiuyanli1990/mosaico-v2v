@@ -33,8 +33,12 @@
 
 typedef enum {
     PAGE_HOME, PAGE_MODES, PAGE_MEETING_SETUP, PAGE_TRAVEL_SETUP, PAGE_MEDIA_SETUP,
+    PAGE_MEETING_MIC_SETUP,
     PAGE_TRANSLATE, PAGE_WIFI, PAGE_PASSWORD, PAGE_COUNT,
 } page_id_t;
+
+#define MEETING_MIC_SETUP SESSION_MODE_COUNT
+#define SETUP_COUNT (SESSION_MODE_COUNT + 1)
 
 typedef struct {
     lv_obj_t *source;
@@ -42,7 +46,7 @@ typedef struct {
     lv_obj_t *voice;
     lv_obj_t *hint;
     lv_obj_t *begin;
-    char voices[512];
+    char voices[TRANSLATION_VOICE_OPTIONS_SIZE];
 } setup_t;
 
 typedef struct {
@@ -59,17 +63,18 @@ static lv_obj_t *wifi_captions[PAGE_COUNT];
 static lv_obj_t *return_buttons[PAGE_COUNT];
 static page_id_t current_page = PAGE_HOME;
 static page_id_t wifi_origin = PAGE_HOME;
-static const page_id_t setup_pages[SESSION_MODE_COUNT] = {
-    PAGE_MEETING_SETUP, PAGE_TRAVEL_SETUP, PAGE_MEDIA_SETUP,
+static const page_id_t setup_pages[SETUP_COUNT] = {
+    PAGE_MEETING_SETUP, PAGE_TRAVEL_SETUP, PAGE_MEDIA_SETUP, PAGE_MEETING_MIC_SETUP,
 };
-static setup_t setups[SESSION_MODE_COUNT];
+static setup_t setups[SETUP_COUNT];
+static bool meeting_mic_configured;
 static direction_t directions[2];
 static lv_obj_t *mode_buttons[SESSION_MODE_COUNT], *mode_status;
 static lv_obj_t *home_clock, *home_date, *home_battery, *home_battery_note;
 static lv_obj_t *translation_title, *translation_status, *translation_action, *translation_action_text;
 static lv_obj_t *volume_slider, *volume_caption;
 static lv_obj_t *brightness_sliders[2], *brightness_captions[2];
-static unsigned brightness = 80, applied_brightness = 80;
+static unsigned brightness = 40, applied_brightness = 40;
 static lv_obj_t *wifi_status, *scan_button, *scan_caption, *ap_list;
 static lv_obj_t *selected_label, *password_status, *password_input;
 static network_ap_t displayed_aps[NETWORK_MAX_APS], selected_ap;
@@ -172,7 +177,7 @@ static lv_obj_t *create_page(page_id_t id)
 static void show_page(page_id_t id)
 {
     /* Dropdown lists live on the screen, outside their page container. */
-    for (unsigned i = 0; i < SESSION_MODE_COUNT; ++i) {
+    for (unsigned i = 0; i < SETUP_COUNT; ++i) {
         if (id != current_page && current_page == setup_pages[i]) {
             lv_dropdown_close(setups[i].source);
             lv_dropdown_close(setups[i].target);
@@ -196,7 +201,7 @@ static void header(page_id_t id)
     lv_obj_t *brand = text(pages[id], "mosaico", 188, 32, 108, LV_FONT_DEFAULT, MUTED);
     lv_obj_set_style_text_align(brand, LV_TEXT_ALIGN_CENTER, 0);
     if (id == PAGE_HOME) {
-        lv_obj_t *version = text(pages[id], "v6", 360, 33, 80, LV_FONT_DEFAULT, GREEN);
+        lv_obj_t *version = text(pages[id], "v9", 360, 33, 80, LV_FONT_DEFAULT, GREEN);
         lv_obj_set_style_text_align(version, LV_TEXT_ALIGN_RIGHT, 0);
     } else {
         return_buttons[id] = button(pages[id], LV_SYMBOL_LEFT " Return", 346, 24, 100, 36, WHITE, INK);
@@ -230,11 +235,15 @@ static void go_back(lv_event_t *event)
     case PAGE_MEDIA_SETUP:
         show_page(PAGE_MODES);
         break;
+    case PAGE_MEETING_MIC_SETUP:
+        show_page(PAGE_MEETING_SETUP);
+        break;
     case PAGE_TRANSLATE:
         /* Gate audio immediately; the session task retains ownership of all
          * asynchronous WebRTC/Agent cleanup before another start is allowed. */
         session_request(false);
-        show_page(setup_pages[session_get_mode()]);
+        show_page(session_get_mode() == SESSION_MODE_LIVE_MEETING ?
+                  PAGE_MEETING_MIC_SETUP : setup_pages[session_get_mode()]);
         break;
     case PAGE_PASSWORD:
         show_page(PAGE_WIFI);
@@ -282,12 +291,19 @@ static setup_t *active_setup(void)
     return &setups[session_get_mode()];
 }
 
-static void select_voice(setup_t *setup)
+static void apply_setup(setup_t *setup)
 {
     const translation_language_t *target = translation_language_at(lv_dropdown_get_selected(setup->target));
     const translation_voice_t *voice = target ? translation_voice_for_language(
         target->code, lv_dropdown_get_selected(setup->voice)) : NULL;
-    session_set_voice(voice ? voice->id : NULL);
+    unsigned source_index = lv_dropdown_get_selected(setup->source);
+    unsigned target_index = lv_dropdown_get_selected(setup->target);
+    if (setup == &setups[MEETING_MIC_SETUP]) {
+        session_set_meeting_mic(source_index, target_index, voice ? voice->id : NULL);
+    } else {
+        session_set_languages(source_index, target_index);
+        session_set_voice(voice ? voice->id : NULL);
+    }
 }
 
 static void build_voice_options(setup_t *setup)
@@ -311,15 +327,33 @@ static void language_changed(lv_event_t *event)
 {
     setup_t *setup = lv_event_get_user_data(event);
     if (lv_event_get_target(event) == setup->target) build_voice_options(setup);
-    session_set_languages(lv_dropdown_get_selected(setup->source), lv_dropdown_get_selected(setup->target));
-    select_voice(setup);
+    apply_setup(setup);
     subtitles_clear();
     refresh(NULL);
 }
 
 static void voice_changed(lv_event_t *event)
 {
-    select_voice(lv_event_get_user_data(event));
+    apply_setup(lv_event_get_user_data(event));
+}
+
+static void meeting_next(lv_event_t *event)
+{
+    (void)event;
+    if (session_busy()) return;
+    setup_t *forward = &setups[SESSION_MODE_LIVE_MEETING];
+    unsigned source = lv_dropdown_get_selected(forward->source);
+    unsigned target = lv_dropdown_get_selected(forward->target);
+    if (source == target) return;
+    if (!meeting_mic_configured) {
+        setup_t *mic = &setups[MEETING_MIC_SETUP];
+        lv_dropdown_set_selected(mic->source, target);
+        lv_dropdown_set_selected(mic->target, source);
+        build_voice_options(mic);
+        meeting_mic_configured = true;
+    }
+    show_page(PAGE_MEETING_MIC_SETUP);
+    refresh(NULL);
 }
 
 static void choose_mode(lv_event_t *event)
@@ -336,8 +370,7 @@ static void choose_mode(lv_event_t *event)
         lv_dropdown_set_selected(setup->target, target);
         build_voice_options(setup);
     }
-    session_set_languages(source, target);
-    select_voice(setup);
+    apply_setup(setup);
     show_page(setup_pages[mode]);
     refresh(NULL);
 }
@@ -384,7 +417,14 @@ static void configure_directions(void)
         else lv_obj_remove_flag(direction->root, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(direction->root, 28 + (int)i * 220, 153);
         lv_obj_set_width(direction->root, media && !i ? 424 : 204);
-        layout_direction_languages(direction, i ? target : source, i ? source : target, media, portable);
+        const translation_language_t *from = i ? target : source;
+        const translation_language_t *to = i ? source : target;
+        if (i && mode == SESSION_MODE_LIVE_MEETING) {
+            setup_t *mic = &setups[MEETING_MIC_SETUP];
+            from = translation_language_at(lv_dropdown_get_selected(mic->source));
+            to = translation_language_at(lv_dropdown_get_selected(mic->target));
+        }
+        layout_direction_languages(direction, from, to, media, portable);
         lv_obj_set_width(direction->hint, media ? 392 : 172);
         lv_obj_set_y(direction->hint, media ? 61 : 99);
         lv_obj_set_height(direction->hint, media ? 63 : 34);
@@ -406,17 +446,24 @@ static void configure_directions(void)
 
 static void begin_translation(lv_event_t *event)
 {
-    (void)event;
     if (session_busy()) return;
-    setup_t *setup = active_setup();
+    setup_t *setup = lv_event_get_user_data(event);
     unsigned source = lv_dropdown_get_selected(setup->source);
     unsigned target = lv_dropdown_get_selected(setup->target);
     if (source == target) {
         set_text(setup->hint, "Choose two different languages to translate.");
         return;
     }
-    session_set_languages(source, target);
-    select_voice(setup);
+    if (session_get_mode() == SESSION_MODE_LIVE_MEETING) {
+        setup_t *forward = &setups[SESSION_MODE_LIVE_MEETING];
+        if (lv_dropdown_get_selected(forward->source) == lv_dropdown_get_selected(forward->target)) {
+            show_page(PAGE_MEETING_SETUP);
+            refresh(NULL);
+            return;
+        }
+        apply_setup(forward);
+    }
+    apply_setup(setup);
     configure_directions();
     subtitles_clear();
     session_set_travel_turn(SESSION_TRAVEL_NONE);
@@ -579,12 +626,12 @@ static lv_obj_t *dropdown(lv_obj_t *parent, int x, int y, int width, const char 
 static void create_setup(unsigned index)
 {
     setup_t *setup = &setups[index];
-    const char *titles[] = {"Meeting, made simple.", "A world between us", "Press play. We translate."};
-    const char *notes[] = {"Two-way translation for your live meeting.", "Pick your languages and a voice.",
-                           "Translate videos from your computer or phone."};
-    const char *from[] = {"MEETING LANGUAGE", "FROM", "MEDIA LANGUAGE"};
-    const char *to[] = {"YOUR LANGUAGE", "TO", "TRANSLATE TO"};
-    const char *begin[] = {"Start live meeting", "Start travel mode", "Start media translation"};
+    const char *titles[] = {"Media to you", "A world between us", "Press play. We translate.", "You to media"};
+    const char *notes[] = {"Step 1 of 2: Translate what you hear.", "Pick your languages and a voice.",
+                           "Translate videos from your computer or phone.", "Step 2 of 2: Translate what you say."};
+    const char *from[] = {"MEDIA LANGUAGE", "FROM", "MEDIA LANGUAGE", "YOUR MIC LANGUAGE"};
+    const char *to[] = {"TRANSLATE TO", "TO", "TRANSLATE TO", "TRANSLATE TO"};
+    const char *begin[] = {"Next: You to media", "Start travel mode", "Start media translation", "Start live meeting"};
     lv_obj_t *page = pages[setup_pages[index]];
     text(page, titles[index], 32, 90, 424, &lv_font_montserrat_28, INK);
     text(page, notes[index], 34, 130, 410, LV_FONT_DEFAULT, MUTED);
@@ -607,7 +654,8 @@ static void create_setup(unsigned index)
     char caption[64];
     snprintf(caption, sizeof(caption), "%s  " LV_SYMBOL_RIGHT, begin[index]);
     setup->begin = button(page, caption, 52, 421, 376, 44, GREEN, WHITE);
-    lv_obj_add_event_cb(setup->begin, begin_translation, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(setup->begin, index == SESSION_MODE_LIVE_MEETING ? meeting_next : begin_translation,
+                        LV_EVENT_CLICKED, setup);
 }
 
 static void create_translation(void)
@@ -858,7 +906,7 @@ static void refresh_translation(const app_snapshot_t *state)
         const char *caption = portable ? (selected ? "LISTENING" : "TAP TO SPEAK") :
                               !running ? "CONNECTING" : !usb.mounted ? "CONNECT DEVICE" :
                               !i && usb.host_muted ? (media ? "MEDIA MUTED" : "MEETING MUTED") :
-                              media ? "MEDIA TO YOU" : i ? "YOU TO MEETING" : "MEETING TO YOU";
+                              i ? "YOU TO MEDIA" : "MEDIA TO YOU";
         if (!session_requested()) caption = "PAUSED";
         set_text(directions[i].state, caption);
         unsigned level = !running ? 0 : portable ? (selected ? media_get_portable_input_level() : 0) :
@@ -875,11 +923,12 @@ static void refresh(lv_timer_t *timer)
     app_snapshot_t state;
     app_get_snapshot(&state);
     bool busy = session_busy();
-    const char *hints[] = {"Choose Mosaico as your meeting's audio device.",
+    const char *hints[] = {"Choose the language and voice you want to hear.",
                            "Tap a language card to speak. Tap it again to pause.",
-                           "Connect a computer or phone, then play your media."};
-    for (unsigned i = 0; i < SESSION_MODE_COUNT; ++i) {
-        set_disabled(mode_buttons[i], busy);
+                           "Connect a computer or phone, then play your media.",
+                           "Choose the language and voice sent to your meeting."};
+    for (unsigned i = 0; i < SETUP_COUNT; ++i) {
+        if (i < SESSION_MODE_COUNT) set_disabled(mode_buttons[i], busy);
         setup_t *setup = &setups[i];
         bool same = lv_dropdown_get_selected(setup->source) == lv_dropdown_get_selected(setup->target);
         set_disabled(setup->source, busy);
@@ -919,15 +968,14 @@ esp_err_t ui_init(void)
     build_language_options();
     create_home();
     create_modes();
-    for (unsigned i = 0; i < SESSION_MODE_COUNT; ++i) create_setup(i);
+    for (unsigned i = 0; i < SETUP_COUNT; ++i) create_setup(i);
     create_translation();
     create_wifi();
     sync_brightness();
     if (bsp_display_brightness_set((int)brightness) != ESP_OK) {
         ESP_LOGW("UI", "Initial brightness could not be applied");
     }
-    session_set_languages(translation_language_index("zh-CN"), translation_language_index("en-US"));
-    select_voice(&setups[0]);
+    apply_setup(&setups[0]);
     show_page(PAGE_HOME);
     refresh(NULL);
     lv_timer_create(refresh, 150, NULL);

@@ -146,6 +146,7 @@ static void reset(session_mode_t mode)
     atomic_store(&requested, false);
     atomic_store(&selected_mode, SESSION_MODE_LIVE_MEETING);
     atomic_store(&travel_turn, SESSION_TRAVEL_NONE);
+    atomic_store(&mic_configured, false);
     active = running = false;
     worker_count = 0;
     cleanup_retry_after_us = next_start_attempt_us = 0;
@@ -279,11 +280,56 @@ static void test_voice_selection(void)
     assert(strcmp(joined_voices[0], translation_voice_for_language("en-US", 0)->id) == 0);
     stop();
 
+    const char *unsupported[] = {"tl-PH", "ms-MY"};
+    for (size_t i = 0; i < sizeof(unsupported) / sizeof(unsupported[0]); ++i) {
+        reset(SESSION_MODE_LIVE_MEETING);
+        session_set_languages(translation_language_index("en-US"), translation_language_index(unsupported[i]));
+        start();
+        assert(!joined_voices[0][0]);
+        assert(strcmp(joined_voices[1], translation_voice_for_language("en-US", 0)->id) == 0);
+        stop();
+    }
+}
+
+static void test_meeting_directions(void)
+{
     reset(SESSION_MODE_LIVE_MEETING);
-    session_set_languages(translation_language_index("en-US"), translation_language_index("tl-PH"));
+    session_set_languages(translation_language_index("zh-CN"), translation_language_index("en-US"));
+    const char *speaker_voice = translation_voice_for_language("en-US", 3)->id;
+    const char *mic_voice = translation_voice_for_language("de-DE", 1)->id;
+    session_set_voice(speaker_voice);
+    session_set_meeting_mic(translation_language_index("fr-FR"), translation_language_index("de-DE"), mic_voice + 6);
     start();
-    assert(!joined_voices[0][0]);
-    assert(strcmp(joined_voices[1], translation_voice_for_language("en-US", 0)->id) == 0);
+    assert(strcmp(sources[0], "zh-CN") == 0 && strcmp(targets[0], "en-US") == 0);
+    assert(strcmp(sources[1], "fr-FR") == 0 && strcmp(targets[1], "de-DE") == 0);
+    assert(strcmp(joined_voices[0], speaker_voice) == 0);
+    assert(strcmp(joined_voices[1], mic_voice) == 0);
+    stop();
+
+    /* Both directions may target the same language with distinct selected voices. */
+    mic_voice = translation_voice_for_language("en-US", 5)->id;
+    session_set_meeting_mic(translation_language_index("ja-JP"), translation_language_index("en-US"), mic_voice);
+    session_set_meeting_mic(TRANSLATION_LANGUAGE_COUNT, 0, mic_voice);
+    session_set_meeting_mic(0, 1, "fm_02_fm_02_invalid");
+    session_request(true);
+    run_ticks(30);
+    assert(strcmp(sources[1], "ja-JP") == 0 && strcmp(targets[1], "en-US") == 0);
+    assert(strcmp(joined_voices[0], speaker_voice) == 0);
+    assert(strcmp(joined_voices[1], mic_voice) == 0);
+    stop();
+
+    session_set_meeting_mic(translation_language_index("en-US"), translation_language_index("ms-MY"), NULL);
+    session_request(true);
+    run_ticks(30);
+    assert(strcmp(targets[1], "ms-MY") == 0 && !joined_voices[1][0]);
+    assert(strcmp(joined_voices[0], speaker_voice) == 0);
+    stop();
+
+    session_set_mode(SESSION_MODE_PORTABLE);
+    session_request(true);
+    run_ticks(30);
+    assert(strcmp(sources[1], "en-US") == 0 && strcmp(targets[1], "zh-CN") == 0);
+    assert(strcmp(joined_voices[1], translation_voice_for_language("zh-CN", 0)->id) == 0);
     stop();
 }
 static void test_failures(void)
@@ -361,6 +407,7 @@ int main(void)
     test_two_way(SESSION_MODE_PORTABLE);
     test_mode_switches();
     test_voice_selection();
+    test_meeting_directions();
     test_failures();
     test_pending_cleanup();
     test_runtime_errors();

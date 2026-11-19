@@ -170,7 +170,7 @@ static void test_mic_and_reference(void)
         add_dma(i * DMA_SAMPLES, false, 1234);
     }
     run_input();
-    assert(processed_frames == 0 && inputs[1].count > 0 && inputs[0].count == 0);
+    assert(processed_frames > 0 && inputs[1].count > 0 && inputs[0].count == 0);
     for (size_t i = 0; i < inputs[1].count; ++i) assert(input_storage[1][i] == 1234);
     assert(board_audio_input_level() > 0);
 
@@ -193,7 +193,7 @@ static void test_mic_and_reference(void)
     add_dma(0, true, 777);
     for (unsigned i = 0; i < 30; ++i) add_dma(240000 + i * DMA_SAMPLES, false, 2222);
     run_input();
-    assert(processed_frames == 0);
+    assert(processed_frames > 0);
     assert(inputs[0].count > 0);
 
     reset_state();
@@ -289,11 +289,10 @@ static void test_dsp_idle_and_resume(void)
         add_dma(start, false, 1234);
     }
     run_input();
-    /* 1.6 s of Mic, but DSP only during two playback bursts + echo tails.
-     * The initial gap resets once, idle frames never rebuild, and playback
-     * resumes with one reset of history left over from the first burst. */
-    assert(processed_frames > 0 && processed_frames < 25);
-    assert(creates == before + 2);
+    /* An active conversation keeps DSP running across the silent middle
+     * phrase. The capture gap causes one history reset. */
+    assert(processed_frames > 25);
+    assert(creates == before + 1);
     for (size_t i = 0; i < inputs[0].count; ++i) assert(input_storage[0][i] == 1234);
 
     reset_state();
@@ -304,14 +303,32 @@ static void test_dsp_idle_and_resume(void)
     assert(creates == before && processed_frames == 0);
 }
 
+static void test_meeting_phrase_continuity(void)
+{
+    reset_state();
+    unsigned before = creates;
+    board_audio_set_route(1);
+    /* Two phrases separated by over a second of DAC silence. */
+    for (unsigned i = 0; i < 320; ++i) {
+        int64_t start = i * DMA_SAMPLES;
+        add_dma(start, true, i < 10 || i >= 290 ? 777 : 0);
+        add_dma(start, false, 1234);
+    }
+    run_input();
+    assert(creates == before);
+    assert(processed_frames > 40);
+    assert(inputs[1].count > 0);
+}
+
 int main(void)
 {
     test_dma_slots();
     test_mic_and_reference();
     test_routes_and_mixer();
     test_gap_reset_coalescing();
+    test_meeting_phrase_continuity();
     test_dsp_idle_and_resume();
     assert(creates > 0 && destroys > 0);
-    puts("PASS: actual audio workers: Mic/ref time, DMA slots, no-ref speech, old-ref expiry, turn switching, PC reverse capture, DAC mixing/errors/cancellation, coalesced AEC reset/allocation backoff");
+    puts("PASS: actual audio workers: continuous conversation AEC, Mic/ref time, DMA slots, no-ref speech, old-ref expiry, turn switching, PC reverse capture, DAC mixing/errors/cancellation, coalesced AEC reset/allocation backoff");
     return 0;
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-set(PROJECT_VER "0.1.0")
+set(PROJECT_VER "v9")
 set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/third_party/esp-mosaico-bsp/components/esp-mosaico-bsp"
     "${CMAKE_CURRENT_LIST_DIR}/third_party/esp-webrtc-solution/components/esp_peer"

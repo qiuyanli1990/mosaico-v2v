@@ -34,6 +34,10 @@ static const char *const agent_keys[SESSION_COUNT + 1] = {
 static atomic_uint source_language_index;
 static atomic_uint target_language_index;
 static char selected_voice_id[TRANSLATION_VOICE_ID_SIZE] = "fm_02_male-qn-qingse";
+static atomic_uint mic_source_language_index;
+static atomic_uint mic_target_language_index;
+static char mic_voice_id[TRANSLATION_VOICE_ID_SIZE];
+static atomic_bool mic_configured;
 static atomic_uint selected_mode;
 static atomic_uint travel_turn;
 static bool active;
@@ -71,9 +75,24 @@ void session_set_languages(size_t source_index, size_t target_index)
 
 void session_set_voice(const char *voice_id)
 {
+    if (!voice_id) {
+        selected_voice_id[0] = '\0';
+        return;
+    }
     char formatted[TRANSLATION_VOICE_ID_SIZE];
     if (translation_format_voice_id(voice_id, formatted, sizeof(formatted)))
         memcpy(selected_voice_id, formatted, strlen(formatted) + 1);
+}
+
+void session_set_meeting_mic(size_t source_index, size_t target_index, const char *voice_id)
+{
+    if (!translation_language_at(source_index) || !translation_language_at(target_index)) return;
+    char formatted[TRANSLATION_VOICE_ID_SIZE] = {0};
+    if (voice_id && !translation_format_voice_id(voice_id, formatted, sizeof(formatted))) return;
+    memcpy(mic_voice_id, formatted, strlen(formatted) + 1);
+    atomic_store(&mic_source_language_index, (unsigned)source_index);
+    atomic_store(&mic_target_language_index, (unsigned)target_index);
+    atomic_store(&mic_configured, true);
 }
 
 void session_set_mode(session_mode_t mode)
@@ -237,7 +256,8 @@ static bool make_channels(char *first_channel, size_t first_capacity,
 
 static esp_err_t start_worker(const worker_t *worker, const char *channel,
                               const translation_language_t *source_language,
-                              const translation_language_t *target_language)
+                              const translation_language_t *target_language,
+                              const char *selected_voice)
 {
     char *agent = pending_agents[worker->source];
     const translation_voice_t *voice = NULL;
@@ -245,7 +265,7 @@ static esp_err_t start_worker(const worker_t *worker, const char *channel,
     for (size_t i = 0; i < voice_count; ++i) {
         const translation_voice_t *candidate =
             translation_voice_for_language(target_language->code, i);
-        if (candidate && strcmp(selected_voice_id, candidate->id) == 0) {
+        if (candidate && selected_voice && strcmp(selected_voice, candidate->id) == 0) {
             voice = candidate;
             break;
         }
@@ -326,6 +346,14 @@ static void start_session(void)
     char message[128];
     active_mode = session_get_mode();
     worker_count = active_mode == SESSION_MODE_MEDIA ? 1 : SESSION_COUNT;
+    const translation_language_t *mic_source = target_language;
+    const translation_language_t *mic_target = source_language;
+    const char *mic_voice = NULL;
+    if (active_mode == SESSION_MODE_LIVE_MEETING && atomic_load(&mic_configured)) {
+        mic_source = translation_language_at(atomic_load(&mic_source_language_index));
+        mic_target = translation_language_at(atomic_load(&mic_target_language_index));
+        mic_voice = mic_voice_id;
+    }
     snprintf(message, sizeof(message), "%s: %s to %s",
              active_mode == SESSION_MODE_MEDIA ? "Starting media translation" :
              active_mode == SESSION_MODE_PORTABLE ? "Starting travel translation" : "Starting live meeting",
@@ -337,8 +365,9 @@ static void start_session(void)
     for (unsigned i = 0; i < worker_count; ++i) {
         if (!session_requested() || !network_is_connected()) break;
         result = start_worker(&workers[i], i ? mic_channel : speaker_channel,
-                              i ? target_language : source_language,
-                              i ? source_language : target_language);
+                              i ? mic_source : source_language,
+                              i ? mic_target : target_language,
+                              i ? mic_voice : selected_voice_id);
         if (result != ESP_OK) break;
     }
     if (result != ESP_OK) {
